@@ -1,0 +1,778 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>PPG Pulso</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500&display=swap');
+
+:root {
+  --bg: #0a0a0f;
+  --surface: #111118;
+  --surface2: #1a1a24;
+  --border: rgba(255,255,255,0.07);
+  --r: #ff4d6d;
+  --g: #39d98a;
+  --b: #4d9fff;
+  --text: #e8e8f0;
+  --muted: #6b6b80;
+  --accent: #7c5cfc;
+  --warn: #f59e0b;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'DM Sans', sans-serif;
+  min-height: 100vh;
+  overflow-x: hidden;
+  padding-bottom: 3rem;
+}
+
+body::before {
+  content: '';
+  position: fixed; inset: 0;
+  background-image:
+    linear-gradient(rgba(124,92,252,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(124,92,252,0.03) 1px, transparent 1px);
+  background-size: 32px 32px;
+  pointer-events: none; z-index: 0;
+}
+
+.app { position: relative; z-index: 1; max-width: 480px; margin: 0 auto; padding: 1.25rem; }
+
+header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.25rem; padding-top: 0.5rem; }
+.logo { font-family: 'Space Mono', monospace; font-size: 13px; color: var(--muted); letter-spacing: 0.1em; }
+.logo span { color: var(--accent); }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); transition: background 0.3s; }
+.status-dot.recording { background: var(--r); box-shadow: 0 0 8px var(--r); animation: pulse-dot 1s infinite; }
+.status-dot.done { background: var(--g); box-shadow: 0 0 8px var(--g); }
+.status-dot.warn { background: var(--warn); box-shadow: 0 0 8px var(--warn); }
+@keyframes pulse-dot { 0%,100%{opacity:1}50%{opacity:0.3} }
+
+/* ── Cámara ── */
+.cam-wrap {
+  position: relative; width: 100%;
+  aspect-ratio: 4/3; border-radius: 16px;
+  overflow: hidden; background: var(--surface);
+  border: 0.5px solid var(--border); margin-bottom: 1rem;
+}
+video { width:100%; height:100%; object-fit:cover; transform:scaleX(-1); display:block; }
+
+.roi-overlay {
+  position:absolute; inset:0;
+  display:flex; align-items:center; justify-content:center;
+  pointer-events:none;
+}
+.roi-box {
+  width:100px; height:100px;
+  border:1.5px solid rgba(255,255,255,0.5);
+  border-radius:12px;
+  box-shadow: 0 0 0 2000px rgba(0,0,0,0.35);
+  transition: border-color 0.3s;
+}
+.roi-box.good  { border-color: var(--g); box-shadow: 0 0 0 2000px rgba(0,0,0,0.35), 0 0 16px rgba(57,217,138,0.4); }
+.roi-box.bad   { border-color: var(--warn); box-shadow: 0 0 0 2000px rgba(0,0,0,0.35), 0 0 16px rgba(245,158,11,0.4); }
+
+/* ── Countdown overlay ── */
+.countdown-overlay {
+  position:absolute; inset:0;
+  display:none; align-items:center; justify-content:center; flex-direction:column;
+  background:rgba(10,10,15,0.62); border-radius:16px; z-index:10;
+}
+.countdown-overlay.show { display:flex; }
+.countdown-ring {
+  position:relative; width:120px; height:120px;
+  display:flex; align-items:center; justify-content:center;
+}
+.countdown-ring svg { position:absolute; inset:0; transform:rotate(-90deg); }
+.countdown-ring circle.track { fill:none; stroke:rgba(255,255,255,0.08); stroke-width:4; }
+.countdown-ring circle.fill  { fill:none; stroke:var(--accent); stroke-width:4;
+  stroke-linecap:round; stroke-dasharray:326; stroke-dashoffset:0;
+  transition: stroke-dashoffset 0.9s linear, stroke 0.3s; }
+.countdown-num {
+  font-family:'Space Mono',monospace; font-size:52px; font-weight:700;
+  color:#fff; line-height:1; position:relative; z-index:1;
+}
+.countdown-sub {
+  font-family:'Space Mono',monospace; font-size:10px;
+  color:rgba(255,255,255,0.45); letter-spacing:0.14em; margin-top:12px;
+}
+
+/* ── Alerta calidad ── */
+.quality-alert {
+  display:none; align-items:center; gap:10px;
+  background:rgba(245,158,11,0.1);
+  border:0.5px solid rgba(245,158,11,0.35);
+  border-radius:10px; padding:10px 14px; margin-bottom:1rem;
+}
+.quality-alert.show { display:flex; }
+.quality-alert .qa-icon { font-size:18px; flex-shrink:0; }
+.quality-alert .qa-text { font-size:12px; color:var(--warn); line-height:1.4; }
+.quality-alert .qa-text strong { display:block; font-size:13px; margin-bottom:2px; }
+
+/* ── Progress ── */
+.progress-wrap { margin-bottom:0.75rem; display:none; }
+.progress-header { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:6px; }
+.progress-label { font-size:11px; color:var(--muted); font-family:'Space Mono',monospace; }
+.progress-count { font-size:11px; color:var(--accent); font-family:'Space Mono',monospace; }
+.progress-bar-bg { height:3px; background:var(--surface2); border-radius:2px; overflow:hidden; }
+.progress-bar-fill { height:100%; width:0%; background:linear-gradient(90deg,var(--accent),var(--b)); border-radius:2px; transition:width 0.08s linear; }
+
+/* ── Señal en vivo ── */
+.live-signal {
+  background:var(--surface); border-radius:12px;
+  border:0.5px solid var(--border);
+  overflow:hidden; margin-bottom:0.875rem;
+  display:none;
+}
+.live-header {
+  display:flex; justify-content:space-between; align-items:center;
+  padding:8px 12px 4px;
+}
+.live-label { font-size:10px; color:var(--muted); font-family:'Space Mono',monospace; letter-spacing:0.05em; }
+.live-legend { display:flex; gap:10px; }
+.live-legend span { font-size:10px; font-family:'Space Mono',monospace; display:flex; align-items:center; gap:4px; }
+.live-legend i { width:14px; height:2px; border-radius:1px; display:inline-block; }
+canvas.live-canvas { width:100%; height:80px; display:block; }
+
+/* ── Botón ── */
+.btn-start {
+  width:100%; padding:1rem; border-radius:12px; border:none;
+  font-family:'Space Mono',monospace; font-size:13px; letter-spacing:0.08em;
+  cursor:pointer; transition:all 0.2s; margin-bottom:0.875rem;
+}
+.btn-start.idle { background:var(--accent); color:#fff; box-shadow:0 0 28px rgba(124,92,252,0.35); }
+.btn-start.idle:active { transform:scale(0.98); box-shadow:none; }
+.btn-start.recording { background:var(--surface2); color:var(--muted); border:0.5px solid var(--border); cursor:not-allowed; }
+
+/* ── Stats ── */
+.stats-row { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-bottom:0.875rem; }
+.stat-card { background:var(--surface); border:0.5px solid var(--border); border-radius:10px; padding:10px 8px; text-align:center; }
+.stat-label { font-size:10px; color:var(--muted); font-family:'Space Mono',monospace; display:block; margin-bottom:4px; }
+.stat-val { font-size:17px; font-weight:500; font-family:'Space Mono',monospace; }
+.stat-val.r { color:var(--r); } .stat-val.g { color:var(--g); } .stat-val.b { color:var(--b); }
+
+/* ── BPM card ── */
+.bpm-card {
+  background:var(--surface2); border:0.5px solid rgba(124,92,252,0.3);
+  border-radius:16px; padding:1.25rem; text-align:center;
+  display:none; margin-bottom:1rem;
+}
+.bpm-card.visible { display:block; }
+.bpm-label { font-size:11px; color:var(--muted); font-family:'Space Mono',monospace; letter-spacing:0.1em; margin-bottom:8px; }
+.bpm-value { font-family:'Space Mono',monospace; font-size:56px; font-weight:700; color:var(--accent); line-height:1; }
+.bpm-unit { font-size:13px; color:var(--muted); margin-top:4px; }
+.bpm-fps { font-size:10px; color:var(--muted); font-family:'Space Mono',monospace; margin-top:6px; }
+
+/* ── Gráficas ── */
+.chart-panel {
+  background:var(--surface); border:0.5px solid var(--border);
+  border-radius:16px; padding:1.25rem 1rem 1rem;
+  margin-bottom:1rem; display:none;
+}
+.chart-panel.visible { display:block; }
+.chart-head { margin-bottom:4px; }
+.chart-title { font-family:'Space Mono',monospace; font-size:11px; color:var(--text); letter-spacing:0.06em; }
+.chart-desc { font-size:11px; color:var(--muted); margin-bottom:10px; margin-top:2px; }
+.chart-legend { display:flex; gap:14px; flex-wrap:wrap; margin-bottom:12px; }
+.chart-legend span { font-size:10px; font-family:'Space Mono',monospace; color:var(--muted); display:flex; align-items:center; gap:5px; }
+.chart-legend i { width:20px; height:2px; border-radius:1px; display:inline-block; }
+.chart-canvas-wrap { border-radius:8px; overflow:hidden; }
+
+/* ── Info chip ── */
+.info-chip {
+  display:inline-flex; align-items:center; gap:6px;
+  background:var(--surface2); border:0.5px solid var(--border);
+  border-radius:99px; padding:5px 12px;
+  font-size:11px; color:var(--muted); font-family:'Space Mono',monospace;
+  margin-bottom:0.75rem;
+}
+.dot { width:6px; height:6px; border-radius:50%; }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <header>
+    <div class="logo"><span>PPG</span>_pulso v2.0</div>
+    <div class="status-dot" id="statusDot"></div>
+  </header>
+
+  <div class="info-chip">
+    <span class="dot" style="background:var(--accent)"></span>
+    Linterna activa durante medición
+  </div>
+
+  <!-- Cámara -->
+  <div class="cam-wrap">
+    <video id="video" autoplay playsinline muted></video>
+    <div class="roi-overlay">
+      <div class="roi-box" id="roiBox"></div>
+    </div>
+    <!-- Countdown -->
+    <div class="countdown-overlay" id="countdownOverlay">
+      <div class="countdown-ring">
+        <svg viewBox="0 0 110 110" width="120" height="120">
+          <circle class="track" cx="55" cy="55" r="52"/>
+          <circle class="fill"  cx="55" cy="55" r="52" id="cdRing"/>
+        </svg>
+        <div class="countdown-num" id="countdownNum">5</div>
+      </div>
+      <div class="countdown-sub">SEGUNDOS RESTANTES</div>
+    </div>
+  </div>
+
+  <!-- Alerta de calidad -->
+  <div class="quality-alert" id="qualityAlert">
+    <div class="qa-icon">⚠️</div>
+    <div class="qa-text">
+      <strong>Dedo no detectado correctamente</strong>
+      Cubre completamente el lente con el dedo índice y presiona suavemente. La linterna debe quedar bloqueada.
+    </div>
+  </div>
+
+  <!-- Progreso -->
+  <div class="progress-wrap" id="progressWrap">
+    <div class="progress-header">
+      <span class="progress-label">CAPTURANDO FRAMES</span>
+      <span class="progress-count" id="progressCount">0 / 150</span>
+    </div>
+    <div class="progress-bar-bg"><div class="progress-bar-fill" id="progressFill"></div></div>
+  </div>
+
+  <!-- Señal en vivo -->
+  <div class="live-signal" id="liveSignalWrap">
+    <div class="live-header">
+      <span class="live-label">SEÑAL EN VIVO</span>
+      <div class="live-legend">
+        <span><i style="background:var(--r)"></i>R</span>
+        <span><i style="background:var(--g)"></i>G</span>
+        <span><i style="background:var(--b)"></i>B</span>
+      </div>
+    </div>
+    <canvas id="liveCanvas" class="live-canvas" width="480" height="80"></canvas>
+  </div>
+
+  <!-- Botón -->
+  <button class="btn-start idle" id="btnStart" onclick="startMeasurement()">
+    ▶ INICIAR MEDICIÓN (5 s)
+  </button>
+
+  <!-- Stats -->
+  <div class="stats-row">
+    <div class="stat-card"><span class="stat-label">R mean</span><span class="stat-val r" id="statR">—</span></div>
+    <div class="stat-card"><span class="stat-label">G mean</span><span class="stat-val g" id="statG">—</span></div>
+    <div class="stat-card"><span class="stat-label">B mean</span><span class="stat-val b" id="statB">—</span></div>
+  </div>
+
+  <!-- BPM -->
+  <div class="bpm-card" id="bpmCard">
+    <div class="bpm-label">FRECUENCIA CARDÍACA ESTIMADA</div>
+    <div class="bpm-value" id="bpmVal">—</div>
+    <div class="bpm-unit">latidos / minuto</div>
+    <div class="bpm-fps" id="bpmFps"></div>
+  </div>
+
+  <!-- Gráfica PPG -->
+  <div class="chart-panel" id="chartPanel">
+    <div class="chart-head">
+      <div class="chart-title">SEÑALES PPG FILTRADAS</div>
+      <div class="chart-desc">Componentes R · G · B — filtro 0.4–5 Hz</div>
+    </div>
+    <div class="chart-legend">
+      <span><i style="background:#ff4d6d"></i>Componente R</span>
+      <span><i style="background:#39d98a"></i>Componente G</span>
+      <span><i style="background:#4d9fff"></i>Componente B</span>
+    </div>
+    <div class="chart-canvas-wrap">
+      <canvas id="ppgChart" height="220"></canvas>
+    </div>
+  </div>
+
+  <!-- Gráfica espectro -->
+  <div class="chart-panel" id="specPanel">
+    <div class="chart-head">
+      <div class="chart-title">ESPECTRO DE FRECUENCIA</div>
+      <div class="chart-desc">FFT canal R — zona cardíaca resaltada</div>
+    </div>
+    <div class="chart-canvas-wrap" style="margin-top:8px">
+      <canvas id="specChart" height="160"></canvas>
+    </div>
+  </div>
+
+</div>
+
+<canvas id="offscreen" style="display:none" width="160" height="120"></canvas>
+
+<script>
+// ─── Estado ──────────────────────────────────────────────────────
+const videoEl   = document.getElementById('video');
+const offCanvas = document.getElementById('offscreen');
+const ctx2d     = offCanvas.getContext('2d', { willReadFrequently: true });
+const liveCtx   = document.getElementById('liveCanvas').getContext('2d');
+
+let stream = null, track = null;
+let collecting = false;
+let frameBuffer = [];
+let liveBufferR = [], liveBufferG = [], liveBufferB = [];
+let startTime = 0;
+let ppgChartInst = null, specChartInst = null;
+let qualityCheckTimer = null;
+let countdownInterval = null;
+
+const TOTAL_FRAMES = 150;
+const FL = 0.4, FH = 5.0, DROP_FRAMES = 30;
+
+// Umbrales de detección de dedo
+const FINGER_R_MIN    = 60;   // R mínimo con linterna y dedo
+const FINGER_R_RATIO  = 1.15; // R debe superar al menos 15% a G y B
+
+// ─── Init cámara ─────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', async () => { await initCamera(); });
+
+async function initCamera() {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+      audio: false
+    });
+    videoEl.srcObject = stream;
+    track = stream.getVideoTracks()[0];
+    try { await track.applyConstraints({ advanced: [{ torch: false }] }); } catch(e) {}
+  } catch(e) {
+    alert('No se pudo acceder a la cámara: ' + e.message);
+  }
+}
+
+// ─── Extraer RGB de ROI central ──────────────────────────────────
+function extractRGB() {
+  ctx2d.drawImage(videoEl, 0, 0, offCanvas.width, offCanvas.height);
+  const cx = offCanvas.width / 2, cy = offCanvas.height / 2;
+  const roiW = 60, roiH = 60;
+  const d = ctx2d.getImageData(cx - roiW/2, cy - roiH/2, roiW, roiH).data;
+  let r = 0, g = 0, b = 0;
+  const n = d.length / 4;
+  for (let i = 0; i < d.length; i += 4) { r += d[i]; g += d[i+1]; b += d[i+2]; }
+  return { r: r/n, g: g/n, b: b/n };
+}
+
+// ─── Detección de calidad de señal (¿hay dedo?) ──────────────────
+function checkFingerQuality(rgb) {
+  // Con linterna + dedo: R alto, R >> G, R >> B
+  const rDomG = rgb.r / (rgb.g || 1);
+  const rDomB = rgb.r / (rgb.b || 1);
+  return rgb.r >= FINGER_R_MIN && rDomG >= FINGER_R_RATIO && rDomB >= FINGER_R_RATIO;
+}
+
+function updateQualityUI(rgb, forceHide) {
+  const ok = checkFingerQuality(rgb);
+  const roiBox = document.getElementById('roiBox');
+  const alert  = document.getElementById('qualityAlert');
+  if (forceHide) {
+    roiBox.className = 'roi-box';
+    alert.classList.remove('show');
+    return;
+  }
+  if (ok) {
+    roiBox.className = 'roi-box good';
+    alert.classList.remove('show');
+  } else {
+    roiBox.className = 'roi-box bad';
+    alert.classList.add('show');
+  }
+}
+
+// ─── Monitor de calidad en reposo ────────────────────────────────
+function startQualityMonitor() {
+  qualityCheckTimer = setInterval(() => {
+    if (!collecting) {
+      const rgb = extractRGB();
+      updateQualityUI(rgb, false);
+    }
+  }, 500);
+}
+setTimeout(startQualityMonitor, 1500);
+
+// ─── Countdown ───────────────────────────────────────────────────
+const CIRCUM = 2 * Math.PI * 52; // radio 52 del SVG
+function startCountdown(totalSecs, onDone) {
+  const overlay = document.getElementById('countdownOverlay');
+  const numEl   = document.getElementById('countdownNum');
+  const ring    = document.getElementById('cdRing');
+
+  ring.style.strokeDasharray = CIRCUM;
+  overlay.classList.add('show');
+
+  let remaining = totalSecs;
+  numEl.textContent = remaining;
+  ring.style.strokeDashoffset = 0;
+
+  countdownInterval = setInterval(() => {
+    remaining--;
+    const progress = remaining / totalSecs;
+    ring.style.strokeDashoffset = CIRCUM * (1 - progress);
+    // Cambiar color según urgencia
+    ring.style.stroke = remaining <= 1 ? 'var(--r)' : remaining <= 2 ? 'var(--warn)' : 'var(--accent)';
+
+    if (remaining <= 0) {
+      clearInterval(countdownInterval);
+      overlay.classList.remove('show');
+      onDone();
+    } else {
+      // Reanimar número
+      numEl.style.animation = 'none';
+      numEl.textContent = remaining;
+      void numEl.offsetWidth; // reflow
+      numEl.style.animation = '';
+    }
+  }, 1000);
+}
+
+// ─── Iniciar medición ────────────────────────────────────────────
+async function startMeasurement() {
+  if (collecting) return;
+
+  // Verificar calidad antes de empezar
+  const rgb = extractRGB();
+  const ok  = checkFingerQuality(rgb);
+  if (!ok) {
+    updateQualityUI(rgb, false);
+    document.getElementById('qualityAlert').classList.add('show');
+    return; // No empezar si no hay dedo
+  }
+
+  collecting = true;
+  frameBuffer = [];
+  liveBufferR = []; liveBufferG = []; liveBufferB = [];
+
+  // Activar linterna
+  try { await track.applyConstraints({ advanced: [{ torch: true }] }); } catch(e) {}
+
+  // Ocultar alerta, resetear UI
+  updateQualityUI(rgb, true);
+  document.getElementById('btnStart').className = 'btn-start recording';
+  document.getElementById('btnStart').textContent = '⏺ MIDIENDO...';
+  document.getElementById('progressWrap').style.display = 'block';
+  document.getElementById('liveSignalWrap').style.display = 'block';
+  document.getElementById('bpmCard').classList.remove('visible');
+  document.getElementById('chartPanel').classList.remove('visible');
+  document.getElementById('specPanel').classList.remove('visible');
+  document.getElementById('statusDot').className = 'status-dot recording';
+  if (ppgChartInst) { ppgChartInst.destroy(); ppgChartInst = null; }
+  if (specChartInst) { specChartInst.destroy(); specChartInst = null; }
+
+  // Countdown de 5 segundos y luego capturar
+  startCountdown(5, () => {
+    startTime = performance.now();
+    captureLoop();
+  });
+}
+
+// ─── Bucle de captura ────────────────────────────────────────────
+function captureLoop() {
+  if (frameBuffer.length >= TOTAL_FRAMES) { finalize(); return; }
+
+  requestAnimationFrame(() => {
+    const rgb = extractRGB();
+    frameBuffer.push(rgb);
+    liveBufferR.push(rgb.r);
+    liveBufferG.push(rgb.g);
+    liveBufferB.push(rgb.b);
+    drawLive();
+
+    // Monitorear calidad durante grabación
+    const stillOk = checkFingerQuality(rgb);
+    if (!stillOk) {
+      // Dedo se movió durante la medición — abortar
+      abortMeasurement();
+      return;
+    }
+
+    const n = frameBuffer.length;
+    document.getElementById('progressCount').textContent = `${n} / ${TOTAL_FRAMES}`;
+    document.getElementById('progressFill').style.width = `${(n / TOTAL_FRAMES) * 100}%`;
+    document.getElementById('statR').textContent = rgb.r.toFixed(1);
+    document.getElementById('statG').textContent = rgb.g.toFixed(1);
+    document.getElementById('statB').textContent = rgb.b.toFixed(1);
+
+    captureLoop();
+  });
+}
+
+// ─── Abortar por pérdida de dedo ─────────────────────────────────
+async function abortMeasurement() {
+  collecting = false;
+  clearInterval(countdownInterval);
+  document.getElementById('countdownOverlay').classList.remove('show');
+  try { await track.applyConstraints({ advanced: [{ torch: false }] }); } catch(e) {}
+
+  document.getElementById('btnStart').className = 'btn-start idle';
+  document.getElementById('btnStart').textContent = '▶ INICIAR MEDICIÓN (5 s)';
+  document.getElementById('statusDot').className = 'status-dot warn';
+  document.getElementById('qualityAlert').classList.add('show');
+  document.getElementById('roiBox').className = 'roi-box bad';
+  document.getElementById('progressFill').style.width = '0%';
+  document.getElementById('progressCount').textContent = '0 / 150';
+}
+
+// ─── Dibujar señal en vivo ────────────────────────────────────────
+function drawLive() {
+  const c = document.getElementById('liveCanvas');
+  const W = c.width, H = c.height;
+  liveCtx.clearRect(0, 0, W, H);
+
+  // Fondo muy sutil
+  liveCtx.fillStyle = 'rgba(17,17,24,0.4)';
+  liveCtx.fillRect(0, 0, W, H);
+
+  const channels = [
+    { buf: liveBufferR, color: 'rgba(255,77,109,0.9)' },
+    { buf: liveBufferG, color: 'rgba(57,217,138,0.75)' },
+    { buf: liveBufferB, color: 'rgba(77,159,255,0.75)' },
+  ];
+  const allVals = [...liveBufferR, ...liveBufferG, ...liveBufferB];
+  const gMin = Math.min(...allVals), gMax = Math.max(...allVals);
+  const range = gMax - gMin || 1;
+
+  channels.forEach(({ buf, color }) => {
+    if (buf.length < 2) return;
+    const vals = buf.slice(-200);
+    liveCtx.beginPath();
+    liveCtx.strokeStyle = color;
+    liveCtx.lineWidth = 1.5;
+    liveCtx.lineJoin = 'round';
+    vals.forEach((v, i) => {
+      const x = (i / (vals.length - 1)) * W;
+      const y = H - ((v - gMin) / range) * (H - 10) - 5;
+      i === 0 ? liveCtx.moveTo(x, y) : liveCtx.lineTo(x, y);
+    });
+    liveCtx.stroke();
+  });
+}
+
+// ─── Finalizar ───────────────────────────────────────────────────
+async function finalize() {
+  const duracion = (performance.now() - startTime) / 1000;
+  const fps = TOTAL_FRAMES / duracion;
+  try { await track.applyConstraints({ advanced: [{ torch: false }] }); } catch(e) {}
+
+  let r = frameBuffer.map(f => f.r).slice(DROP_FRAMES);
+  let g = frameBuffer.map(f => f.g).slice(DROP_FRAMES);
+  let b = frameBuffer.map(f => f.b).slice(DROP_FRAMES);
+
+  const rF = lowpass(highpass(r, FL, fps), FH, fps);
+  const gF = lowpass(highpass(g, FL, fps), FH, fps);
+  const bF = lowpass(highpass(b, FL, fps), FH, fps);
+
+  const muestras = rF.length;
+  const totalDur = duracion * (muestras / TOTAL_FRAMES);
+  const t = Array.from({length: muestras}, (_, i) =>
+    parseFloat((1 + i * (totalDur - 1) / (muestras - 1)).toFixed(3)));
+
+  const bpm = estimateBPM(rF, fps);
+
+  document.getElementById('bpmVal').textContent = Math.round(bpm);
+  document.getElementById('bpmFps').textContent = `fps real: ${fps.toFixed(1)} · muestras: ${muestras}`;
+  document.getElementById('bpmCard').classList.add('visible');
+  document.getElementById('btnStart').className = 'btn-start idle';
+  document.getElementById('btnStart').textContent = '▶ MEDIR DE NUEVO';
+  document.getElementById('statusDot').className = 'status-dot done';
+  document.getElementById('roiBox').className = 'roi-box';
+  collecting = false;
+
+  renderPPGChart(t, rF, gF, bF);
+  renderSpecChart(rF, fps);
+}
+
+// ─── Filtros ─────────────────────────────────────────────────────
+function highpass(sig, fc, fs) {
+  const alpha = (1 / (2 * Math.PI * fc)) / ((1 / (2 * Math.PI * fc)) + (1 / fs));
+  const out = new Array(sig.length); out[0] = sig[0];
+  for (let i = 1; i < sig.length; i++)
+    out[i] = alpha * (out[i-1] + sig[i] - sig[i-1]);
+  return out;
+}
+function lowpass(sig, fc, fs) {
+  const alpha = (1/fs) / ((1 / (2 * Math.PI * fc)) + (1/fs));
+  const out = new Array(sig.length); out[0] = sig[0];
+  for (let i = 1; i < sig.length; i++)
+    out[i] = out[i-1] + alpha * (sig[i] - out[i-1]);
+  return out;
+}
+
+// ─── FFT ─────────────────────────────────────────────────────────
+function fft(re, im) {
+  const n = re.length; if (n <= 1) return;
+  const re_e=[], re_o=[], im_e=[], im_o=[];
+  for (let i=0;i<n;i+=2){re_e.push(re[i]);im_e.push(im[i]);}
+  for (let i=1;i<n;i+=2){re_o.push(re[i]);im_o.push(im[i]);}
+  fft(re_e,im_e); fft(re_o,im_o);
+  for (let k=0;k<n/2;k++){
+    const a=-2*Math.PI*k/n, wr=Math.cos(a), wi=Math.sin(a);
+    const tr=wr*re_o[k]-wi*im_o[k], ti=wr*im_o[k]+wi*re_o[k];
+    re[k]=re_e[k]+tr; im[k]=im_e[k]+ti;
+    re[k+n/2]=re_e[k]-tr; im[k+n/2]=im_e[k]-ti;
+  }
+}
+function nextPow2(n){let p=1;while(p<n)p<<=1;return p;}
+function estimateBPM(sig, fps) {
+  const N=nextPow2(sig.length);
+  const re=new Array(N).fill(0), im=new Array(N).fill(0);
+  for(let i=0;i<sig.length;i++) re[i]=sig[i];
+  fft(re,im);
+  const mag=re.map((r,i)=>Math.sqrt(r*r+im[i]*im[i]));
+  let bestK=0, bestMag=0;
+  for(let k=1;k<=N/2;k++){
+    const bpm=k*fps/N*60;
+    if(bpm>=42&&bpm<=180&&mag[k]>bestMag){bestMag=mag[k];bestK=k;}
+  }
+  return bestK*fps/N*60;
+}
+
+// ─── Gráfica PPG mejorada ─────────────────────────────────────────
+function renderPPGChart(t, r, g, b) {
+  document.getElementById('chartPanel').classList.add('visible');
+
+  // Escala dinámica: ±1.5× la amplitud máxima real
+  const allFiltered = [...r, ...g, ...b];
+  const absMax = Math.max(...allFiltered.map(Math.abs));
+  const yLim = Math.ceil(absMax * 1.4 * 10) / 10 || 1;
+
+  // Submuestrear para que la gráfica sea más limpia
+  const step = Math.max(1, Math.floor(t.length / 200));
+  const tS = t.filter((_,i) => i % step === 0);
+  const rS = r.filter((_,i) => i % step === 0);
+  const gS = g.filter((_,i) => i % step === 0);
+  const bS = b.filter((_,i) => i % step === 0);
+
+  const ctx = document.getElementById('ppgChart').getContext('2d');
+  ppgChartInst = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: tS.map(v => v.toFixed(1)),
+      datasets: [
+        { label:'R', data:rS, borderColor:'#ff4d6d', borderWidth:2, pointRadius:0, tension:0.35, fill:false },
+        { label:'G', data:gS, borderColor:'#39d98a', borderWidth:1.5, pointRadius:0, tension:0.35, fill:false, borderDash:[4,3] },
+        { label:'B', data:bS, borderColor:'#4d9fff', borderWidth:1.5, pointRadius:0, tension:0.35, fill:false, borderDash:[2,4] },
+      ]
+    },
+    options: {
+      responsive: true,
+      animation: { duration: 600, easing: 'easeOutQuart' },
+      interaction: { mode: 'index', intersect: false },
+      scales: {
+        x: {
+          title: { display:true, text:'t  /  s', color:'#6b6b80', font:{family:'Space Mono',size:10} },
+          ticks: { color:'#6b6b80', font:{size:9}, maxTicksLimit:7, autoSkip:true },
+          grid: { color:'rgba(255,255,255,0.04)', lineWidth:0.5 },
+          border: { color:'rgba(255,255,255,0.08)' }
+        },
+        y: {
+          title: { display:true, text:'y(t)', color:'#6b6b80', font:{family:'Space Mono',size:10} },
+          ticks: { color:'#6b6b80', font:{size:9}, maxTicksLimit:6 },
+          grid: { color:'rgba(255,255,255,0.04)', lineWidth:0.5 },
+          border: { color:'rgba(255,255,255,0.08)' },
+          min: -yLim, max: yLim
+        }
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor:'rgba(17,17,24,0.95)',
+          borderColor:'rgba(255,255,255,0.1)', borderWidth:0.5,
+          titleColor:'#e8e8f0', bodyColor:'#6b6b80',
+          titleFont:{family:'Space Mono',size:10},
+          bodyFont:{family:'Space Mono',size:10},
+          padding:10,
+          callbacks: {
+            title: (items) => `t = ${items[0].label} s`,
+            label: (item) => ` ${item.dataset.label}: ${Number(item.raw).toFixed(3)}`
+          }
+        }
+      }
+    }
+  });
+}
+
+// ─── Gráfica espectro mejorada ────────────────────────────────────
+function renderSpecChart(sig, fps) {
+  document.getElementById('specPanel').classList.add('visible');
+  const N = nextPow2(sig.length);
+  const re = new Array(N).fill(0), im = new Array(N).fill(0);
+  for (let i=0; i<sig.length; i++) re[i]=sig[i];
+  fft(re, im);
+
+  const freqs=[], mags=[], colors=[];
+  const peakBPM = estimateBPM(sig, fps);
+
+  for (let k=1; k<=N/2; k++) {
+    const freq = k*fps/N;
+    if (freq < 0.35 || freq > 5.2) continue;
+    const bpm = freq*60;
+    const mag = Math.sqrt(re[k]*re[k]+im[k]*im[k]);
+    freqs.push(freq.toFixed(2));
+    mags.push(parseFloat(mag.toFixed(2)));
+    // Resaltar zona cardíaca vs pico detectado
+    const isCardiac = bpm >= 42 && bpm <= 180;
+    const isPeak    = Math.abs(bpm - peakBPM) < 3;
+    colors.push(isPeak ? '#7c5cfc' : isCardiac ? 'rgba(124,92,252,0.35)' : 'rgba(255,255,255,0.07)');
+  }
+
+  const ctx = document.getElementById('specChart').getContext('2d');
+  specChartInst = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: freqs,
+      datasets: [{
+        data: mags,
+        backgroundColor: colors,
+        borderColor: colors.map(c => c === '#7c5cfc' ? '#a78bfa' : 'transparent'),
+        borderWidth: colors.map(c => c === '#7c5cfc' ? 1 : 0),
+        borderRadius: 2,
+        barPercentage: 0.9, categoryPercentage: 0.95,
+      }]
+    },
+    options: {
+      responsive: true,
+      animation: { duration: 500, easing: 'easeOutQuart' },
+      scales: {
+        x: {
+          title: { display:true, text:'Frecuencia  /  Hz', color:'#6b6b80', font:{family:'Space Mono',size:10} },
+          ticks: { color:'#6b6b80', font:{size:8}, maxTicksLimit:9, autoSkip:true },
+          grid: { display:false },
+          border: { color:'rgba(255,255,255,0.08)' }
+        },
+        y: {
+          ticks: { color:'#6b6b80', font:{size:9}, maxTicksLimit:5 },
+          grid: { color:'rgba(255,255,255,0.04)', lineWidth:0.5 },
+          border: { color:'rgba(255,255,255,0.08)' }
+        }
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor:'rgba(17,17,24,0.95)',
+          borderColor:'rgba(255,255,255,0.1)', borderWidth:0.5,
+          titleColor:'#e8e8f0', bodyColor:'#6b6b80',
+          titleFont:{family:'Space Mono',size:10},
+          bodyFont:{family:'Space Mono',size:10},
+          padding:10,
+          callbacks: {
+            title: (items) => `${items[0].label} Hz`,
+            label: (item) => ` ${(parseFloat(item.label)*60).toFixed(0)} BPM  |  mag ${Number(item.raw).toFixed(1)}`
+          }
+        }
+      }
+    }
+  });
+}
+</script>
+</body>
+</html>
